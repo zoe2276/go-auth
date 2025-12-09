@@ -1,11 +1,15 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/dgrijalva/jwt-go"
@@ -17,15 +21,23 @@ import (
 
 // User is a user in the system
 type User struct {
-	Id          int    `db:"id"`
-	Username    string `db:"username"`
-	Password    string `db:"password"`
-	Email       string `db:"email"`
-	CreatedTime string `db:"created_time"`
-	LastLogin   string `db:"last_login"`
+	Id          int            `db:"id"`
+	Username    string         `db:"username"`
+	Password    string         `db:"password"`
+	Email       string         `db:"email"`
+	CreatedTime string         `db:"created_time"`
+	LastLogin   sql.NullString `db:"last_login"`
+	Roles       string         `db:"roles"`
+}
+
+type JWTClaims struct {
+	Username   string      `json:"username"`
+	Expiration json.Number `json:"exp"`
+	jwt.StandardClaims
 }
 
 var db *sqlx.DB
+var jwtKey = []byte(os.Getenv("jwtSigningKey"))
 
 func main() {
 	// connect to pgs
@@ -39,11 +51,55 @@ func main() {
 
 	// init router
 	router := mux.NewRouter()
-	router.HandleFunc("/register", RegisterHandler).Methods("POST")
-	router.HandleFunc("/token", LoginHandler).Methods("POST")
+	api := "/api"
+
+	// unauthorized routes
+
+	router.HandleFunc(api+"/register", RegisterHandler).Methods("POST")
+	router.HandleFunc(api+"/token", TokenHandler).Methods("POST")
+
+	// authorized routes
+
+	router.Handle(api+"/authorization", AuthMiddleware(http.HandlerFunc(AuthorizationHandler))).Methods("GET")
 
 	log.Fatal(http.ListenAndServe(":8099", router))
 }
+
+// Middleware
+
+func AuthMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tokenString := r.Header.Get("Authorization")
+		if tokenString == "" {
+			http.Error(w, "No token provided", http.StatusUnauthorized)
+			return
+		}
+
+		tokenString = strings.TrimPrefix(tokenString, "Bearer ")
+
+		token, err := jwt.ParseWithClaims(tokenString, &JWTClaims{}, func(token *jwt.Token) (any, error) {
+			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+				return nil, fmt.Errorf("unexpected signing method")
+			}
+			return jwtKey, nil
+		})
+		if err != nil || !token.Valid {
+			http.Error(w, "Invalid token", http.StatusUnauthorized)
+			if err != nil {
+				log.Println("invalid token", err)
+			}
+			return
+		}
+
+		claims := token.Claims.(*JWTClaims)
+		ctx := context.WithValue(r.Context(), "jwtClaims", claims)
+
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
+// Endpoints
+// Unsecured
 
 // RegisterHandler handles user registration
 func RegisterHandler(w http.ResponseWriter, r *http.Request) {
@@ -72,8 +128,8 @@ func RegisterHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"message": "User registered successfully"})
 }
 
-// LoginHandler for user login
-func LoginHandler(w http.ResponseWriter, r *http.Request) {
+// TokenHandler for user API login
+func TokenHandler(w http.ResponseWriter, r *http.Request) {
 	var creds struct {
 		Username string `json:"username"`
 		Password string `json:"password"`
@@ -107,7 +163,7 @@ func LoginHandler(w http.ResponseWriter, r *http.Request) {
 		"username": user.Username,
 		"exp":      tokenExpiration,
 	})
-	tokenString, err := token.SignedString([]byte("4jejune[EGJEidzZ"))
+	tokenString, err := token.SignedString(jwtKey)
 	if err != nil {
 		http.Error(w, "Server error", http.StatusInternalServerError)
 		log.Println(err)
@@ -125,4 +181,26 @@ func LoginHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]string{"token": tokenString, "expires": strconv.FormatInt(tokenExpiration, 10)})
+}
+
+// Secured
+
+// AuthorizedHandler displays authorization information for the signed in user
+func AuthorizationHandler(w http.ResponseWriter, r *http.Request) {
+	c := r.Context().Value("jwtClaims").(*JWTClaims)
+
+	var user User
+	err := db.Get(&user, "select * from users where username=$1", c.Username)
+	if err != nil {
+		http.Error(w, "Server error", http.StatusInternalServerError)
+		log.Println(err)
+		return
+	}
+
+	json.NewEncoder(w).Encode(map[string]any{
+		"authorized": true,
+		"user":       user.Username,
+		"email":      user.Email,
+		"roles":      user.Roles,
+	})
 }
