@@ -16,18 +16,19 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/jmoiron/sqlx"
 	_ "github.com/lib/pq"
+	"github.com/rs/cors"
 	"golang.org/x/crypto/bcrypt"
 )
 
 // User is a user in the system
 type User struct {
 	Id          int            `db:"id"`
-	Username    string         `db:"username"`
-	Password    string         `db:"password"`
-	Email       string         `db:"email"`
+	Username    string         `db:"username" json:"username"`
+	Password    string         `db:"password" json:"password"`
+	Email       string         `db:"email" json:"email"`
 	CreatedTime string         `db:"created_time"`
 	LastLogin   sql.NullString `db:"last_login"`
-	Roles       string         `db:"roles"`
+	Roles       string         `db:"roles" json:"roles"`
 }
 
 type JWTClaims struct {
@@ -38,6 +39,12 @@ type JWTClaims struct {
 
 var db *sqlx.DB
 var jwtKey = []byte(os.Getenv("jwtSigningKey"))
+
+func returnJson(w http.ResponseWriter, message string, status int) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(map[string]string{"message": message})
+}
 
 func main() {
 	// connect to pgs
@@ -62,7 +69,14 @@ func main() {
 
 	router.Handle(api+"/authorization", AuthMiddleware(http.HandlerFunc(AuthorizationHandler))).Methods("GET")
 
-	log.Fatal(http.ListenAndServe(":8099", router))
+	// cors
+	c := cors.New(cors.Options{
+		AllowedOrigins:   []string{"http://localhost:5173", "https://zoe.rip"},
+		AllowCredentials: true,
+	})
+
+	handler := c.Handler(router)
+	log.Fatal(http.ListenAndServe(":8099", handler))
 }
 
 // Middleware
@@ -71,7 +85,7 @@ func AuthMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		tokenString := r.Header.Get("Authorization")
 		if tokenString == "" {
-			http.Error(w, "No token provided", http.StatusUnauthorized)
+			returnJson(w, "No token provided", http.StatusUnauthorized)
 			return
 		}
 
@@ -84,7 +98,7 @@ func AuthMiddleware(next http.Handler) http.Handler {
 			return jwtKey, nil
 		})
 		if err != nil || !token.Valid {
-			http.Error(w, "Invalid token", http.StatusUnauthorized)
+			returnJson(w, "Invalid token", http.StatusUnauthorized)
 			if err != nil {
 				log.Println("invalid token", err)
 			}
@@ -105,21 +119,20 @@ func AuthMiddleware(next http.Handler) http.Handler {
 func RegisterHandler(w http.ResponseWriter, r *http.Request) {
 	var user User
 	if err := json.NewDecoder(r.Body).Decode(&user); err != nil {
-		http.Error(w, "Invalid Input", http.StatusBadRequest)
+		returnJson(w, "Invalid input", http.StatusBadRequest)
 		return
 	}
 
 	// hash the pw
-	hashedPw, err := bcrypt.GenerateFromPassword([]byte(user.Password), bcrypt.DefaultCost)
+	hashedPw, err := bcrypt.GenerateFromPassword([]byte(user.Password), bcrypt.MinCost)
 	if err != nil {
-		http.Error(w, "Server error", http.StatusInternalServerError)
+		returnJson(w, "Server error", http.StatusInternalServerError)
 		return
 	}
 
 	_, err = db.Exec("insert into users (username, password, email) values ($1, $2, $3);", user.Username, string(hashedPw), user.Email)
 	if err != nil {
-		http.Error(w, "Username or email already exists", http.StatusConflict)
-		log.Println(err)
+		returnJson(w, "Username or email already exists", http.StatusConflict)
 		return
 	}
 
@@ -135,7 +148,8 @@ func TokenHandler(w http.ResponseWriter, r *http.Request) {
 		Password string `json:"password"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&creds); err != nil {
-		http.Error(w, "Invalid input", http.StatusBadRequest)
+		returnJson(w, "Invalid input", http.StatusBadRequest)
+		log.Println(err)
 		return
 	}
 
@@ -143,17 +157,17 @@ func TokenHandler(w http.ResponseWriter, r *http.Request) {
 	var user User
 	err := db.Get(&user, "select * from users where username=$1", creds.Username)
 	if err == sql.ErrNoRows {
-		http.Error(w, "Invalid credentials", http.StatusBadRequest)
+		returnJson(w, "Invalid credentials", http.StatusBadRequest)
 		return
 	} else if err != nil {
-		http.Error(w, "Server error", http.StatusInternalServerError)
+		returnJson(w, "Server error", http.StatusInternalServerError)
 		log.Println("error getting user from db:", err)
 		return
 	}
 
 	// verify password
 	if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(creds.Password)); err != nil {
-		http.Error(w, "Invalid credentials", http.StatusUnauthorized)
+		returnJson(w, "Invalid credentials", http.StatusBadRequest)
 		return
 	}
 
@@ -165,7 +179,7 @@ func TokenHandler(w http.ResponseWriter, r *http.Request) {
 	})
 	tokenString, err := token.SignedString(jwtKey)
 	if err != nil {
-		http.Error(w, "Server error", http.StatusInternalServerError)
+		returnJson(w, "Server error", http.StatusInternalServerError)
 		log.Println(err)
 		return
 	}
@@ -174,7 +188,7 @@ func TokenHandler(w http.ResponseWriter, r *http.Request) {
 	var _ any
 	_, err = db.Exec("update users set last_login=current_timestamp where id=$1", user.Id)
 	if err != nil {
-		http.Error(w, "Server error", http.StatusInternalServerError)
+		returnJson(w, "Server error", http.StatusInternalServerError)
 		log.Println(err)
 		return
 	}
@@ -192,11 +206,12 @@ func AuthorizationHandler(w http.ResponseWriter, r *http.Request) {
 	var user User
 	err := db.Get(&user, "select * from users where username=$1", c.Username)
 	if err != nil {
-		http.Error(w, "Server error", http.StatusInternalServerError)
+		returnJson(w, "Server error", http.StatusInternalServerError)
 		log.Println(err)
 		return
 	}
 
+	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]any{
 		"authorized": true,
 		"user":       user.Username,
