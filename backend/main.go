@@ -15,7 +15,10 @@ import (
 	"github.com/dgrijalva/jwt-go"
 	"github.com/gorilla/mux"
 	"github.com/jmoiron/sqlx"
-	_ "github.com/lib/pq"
+	"github.com/joho/godotenv"
+
+	// _ "github.com/lib/pq"
+	_ "github.com/go-sql-driver/mysql"
 	"github.com/rs/cors"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -24,10 +27,11 @@ import (
 type User struct {
 	Id          int            `db:"id"`
 	Username    string         `db:"username" json:"username"`
-	Password    string         `db:"password" json:"password"`
+	Password    string         `db:"pwhash" json:"password"`
 	Email       string         `db:"email" json:"email"`
 	CreatedTime string         `db:"created_time"`
 	LastLogin   sql.NullString `db:"last_login"`
+	LastPwReset sql.NullString `db:"last_pw_update"`
 	Roles       string         `db:"roles" json:"roles"`
 }
 
@@ -47,10 +51,16 @@ func returnJson(w http.ResponseWriter, message string, status int) {
 }
 
 func main() {
-	// connect to pgs
-	connectionString := "user=postgres password=$_jejune dbname=auth sslmode=disable port=9884"
 	var err error
-	db, err = sqlx.Connect("postgres", connectionString)
+	err = godotenv.Load()
+	if err != nil {
+		log.Println(err)
+		log.Fatal("Error loading .env")
+	}
+
+	// connect to mysql
+	connectionString := os.Getenv("authDbDsn")
+	db, err = sqlx.Connect("mysql", connectionString)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -130,7 +140,8 @@ func RegisterHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, err = db.Exec("insert into users (username, password, email) values ($1, $2, $3);", user.Username, string(hashedPw), user.Email)
+	rolesJson, _ := json.Marshal(user.Roles)
+	_, err = db.Exec("insert into users (username, pwhash, email, roles) values (?, ?, ?, ?);", user.Username, string(hashedPw), user.Email, string(rolesJson))
 	if err != nil {
 		returnJson(w, "Username or email already exists", http.StatusConflict)
 		return
@@ -155,7 +166,7 @@ func TokenHandler(w http.ResponseWriter, r *http.Request) {
 
 	// check db for user
 	var user User
-	err := db.Get(&user, "select * from users where username=$1", creds.Username)
+	err := db.Get(&user, "select * from users where username=?", creds.Username)
 	if err == sql.ErrNoRows {
 		returnJson(w, "Invalid credentials", http.StatusBadRequest)
 		return
@@ -186,7 +197,7 @@ func TokenHandler(w http.ResponseWriter, r *http.Request) {
 
 	// update last login timestamp
 	var _ any
-	_, err = db.Exec("update users set last_login=current_timestamp where id=$1", user.Id)
+	_, err = db.Exec("update users set last_login=current_timestamp where id=?", user.Id)
 	if err != nil {
 		returnJson(w, "Server error", http.StatusInternalServerError)
 		log.Println(err)
@@ -204,7 +215,7 @@ func AuthorizationHandler(w http.ResponseWriter, r *http.Request) {
 	c := r.Context().Value("jwtClaims").(*JWTClaims)
 
 	var user User
-	err := db.Get(&user, "select * from users where username=$1", c.Username)
+	err := db.Get(&user, "select * from users where username=?", c.Username)
 	if err != nil {
 		returnJson(w, "Server error", http.StatusInternalServerError)
 		log.Println(err)
