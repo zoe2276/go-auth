@@ -55,7 +55,10 @@ func main() {
 	err = godotenv.Load()
 	if err != nil {
 		log.Println(err)
-		log.Fatal("Error loading .env")
+
+		if err = godotenv.Load("/opt/goapp/.env"); err != nil {
+			log.Fatal(err)
+		}
 	}
 
 	// connect to mysql
