@@ -21,8 +21,9 @@ jobs:
 
       - name: Build
         run: |
+          cd backend
           mkdir build
-          GOOS=linux GOARCH=amd64 go build -o build/app ./backend
+          GOOS=linux GOARCH=amd64 go build -o build/app main.go
 
       - name: Upload via SSH
         uses: appleboy/scp-action@v0.1.7
