@@ -1,0 +1,44 @@
+
+name: Deploy to EC2
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.23.x"
+
+      - name: Build
+        run: |
+          mkdir build
+          GOOS=linux GOARCH=amd64 go build -o build/app ./main.go
+
+      - name: Upload via SSH
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: deploy
+          key: ${{ secrets.EC2_SSH_KEY }}
+          source: "build/app"
+          target: "/opt/goapp/"
+
+      - name: Restart service
+        uses: appleboy/ssh-action@v0.1.9
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: deploy
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            sudo systemctl restart goapp
+            sudo systemctl status goapp --no-pager
