@@ -31,7 +31,7 @@ jobs:
           host: ${{ secrets.EC2_HOST }}
           username: deploy
           key: ${{ secrets.EC2_SSH_KEY }}
-          source: "./build/app"
+          source: "./build/"
           target: "/opt/goapp/"
 
       - name: Restart service
