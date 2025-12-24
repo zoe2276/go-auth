@@ -52,19 +52,21 @@ func returnJson(w http.ResponseWriter, message string, status int) {
 
 func main() {
 	var err error
-	err = godotenv.Load()
-	if err != nil {
-		log.Println(err)
+	// err = godotenv.Load(".env")
+	// if err != nil {
+	// 	log.Println(err)
 
-		if err = godotenv.Load("/opt/goapp/.env"); err != nil {
-			log.Fatal(err)
-		}
+	if err = godotenv.Load("/opt/goapp/.env"); err != nil {
+		log.Fatal(err)
 	}
+	// }
 
 	// connect to mysql
 	connectionString := os.Getenv("authDbDsn")
 	db, err = sqlx.Connect("mysql", connectionString)
 	if err != nil {
+		log.Println("error connecting to sql server with connectionstr:")
+		log.Println(connectionString)
 		log.Fatal(err)
 	}
 	defer db.Close()
@@ -89,7 +91,7 @@ func main() {
 	})
 
 	handler := c.Handler(router)
-	log.Fatal(http.ListenAndServe(":8099", handler))
+	log.Fatal(http.ListenAndServe(":1358", handler))
 }
 
 // Middleware
