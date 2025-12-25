@@ -146,8 +146,9 @@ func RegisterHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rolesJson, _ := json.Marshal(user.Roles)
-	_, err = db.Exec("insert into users (username, pwhash, email, roles) values (?, ?, ?, ?);", user.Username, string(hashedPw), user.Email, string(rolesJson))
+	_, err = db.Exec("insert into Users (username, pwhash, email, roles) values (?, ?, ?, ?);", user.Username, string(hashedPw), user.Email, string(rolesJson))
 	if err != nil {
+		log.Println(err)
 		returnJson(w, "Username or email already exists", http.StatusConflict)
 		return
 	}
@@ -171,7 +172,7 @@ func TokenHandler(w http.ResponseWriter, r *http.Request) {
 
 	// check db for user
 	var user User
-	err := db.Get(&user, "select * from users where username=?", creds.Username)
+	err := db.Get(&user, "select * from Users where username=?", creds.Username)
 	if err == sql.ErrNoRows {
 		returnJson(w, "Invalid credentials", http.StatusBadRequest)
 		return
@@ -202,7 +203,7 @@ func TokenHandler(w http.ResponseWriter, r *http.Request) {
 
 	// update last login timestamp
 	var _ any
-	_, err = db.Exec("update users set last_login=current_timestamp where id=?", user.Id)
+	_, err = db.Exec("update Users set last_login=current_timestamp where id=?", user.Id)
 	if err != nil {
 		returnJson(w, "Server error", http.StatusInternalServerError)
 		log.Println(err)
@@ -220,7 +221,7 @@ func AuthorizationHandler(w http.ResponseWriter, r *http.Request) {
 	c := r.Context().Value("jwtClaims").(*JWTClaims)
 
 	var user User
-	err := db.Get(&user, "select * from users where username=?", c.Username)
+	err := db.Get(&user, "select * from Users where username=?", c.Username)
 	if err != nil {
 		returnJson(w, "Server error", http.StatusInternalServerError)
 		log.Println(err)
